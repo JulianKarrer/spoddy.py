@@ -6,9 +6,10 @@ Just pass the open.spotify.com/... - link as an argument to get started.
 
 ## Features
 
-- Download entire Spotify Playlists or Albums via Youtube
+- Download entire Spotify Playlists, Albums or Artist Top 10s via Youtube
 - Completely legal, no ripping involved. As a trade-off, some songs might not be found or you might download wrong versions
 - Uses multithreading to enable faster concurrent downloads
+- Provide search keywords to be appended to the Youtube search requests
 
 ## Prerequisites
 

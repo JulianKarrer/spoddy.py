@@ -3,6 +3,7 @@ import urllib.request
 import re
 import subprocess
 import os
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,7 +11,16 @@ from concurrent.futures import ThreadPoolExecutor
 playlistTitle = "playlist"
 playlistTracks = []
 playlistArtists = []
-searchKeywords = " Lyrics Official"
+allowedUrls = (
+"https://open.spotify.com/playlist/",
+"https://open.spotify.com/album/",
+"https://open.spotify.com/artist/",
+"http://open.spotify.com/playlist/",
+"http://open.spotify.com/album/",
+"http://open.spotify.com/artist/",
+"open.spotify.com/playlist/",
+"open.spotify.com/album/",
+"open.spotify.com/artist/")
 
 #catch args passed to the python script and provide help info
 parser = argparse.ArgumentParser(description='Search for and download entire Spotify playlists from Youtube')
@@ -18,9 +28,10 @@ parser.add_argument("url",nargs=1,help="The url of the Spotify playlist to be do
 parser.add_argument("--pathToYoutube-dl",default="youtube-dl",help="""The path to the youtube-dl. Defaults to "youtube-dl". When using Windows, this should point to the youtube-dl.exe file if it is not in spoddy.py's root directory. When using UNIX there is no need to change this.""")
 parser.add_argument("--fast",action='store_true',help="When this flag is set, instead of downloading the songs as videos from youtube, then converting them with ffmpeg, the m4a audio is directly downloaded if present. this can significantly speed up the download process. Use if ffmpeg is not available.")
 parser.add_argument("--mp3",action='store_true',help="When using --fast also set this flag to convert all m4a songs to mp3 after downloading them using ffmpeg. This requires ffmpeg in the working directory (Windows) or a valid ffmpeg installation (UNIX).")
+parser.add_argument("--wav",action='store_true',help="Fulfills the same function as the --mp3 flag, except it converts m4a songs to wav. This overwrites --mp3")
+parser.add_argument("--keywords",nargs="*",help="Sets the keywords that are appended to the Youtube search request for each song title. Defaults to 'Lyrics Official'")
 parser.add_argument("--threads", type=int, default=7, nargs=r"?", help="This specifies the maximum number of threads to use when downloading and converting songs. Defaults to 7.")
 args = parser.parse_args()
-
 
 #use args to set values
 pathToYoutubedl = "youtube-dl"
@@ -32,10 +43,21 @@ if(args.fast):
 	command = pathToYoutubedl + " -f bestaudio[ext=m4a] "
 
 maxThreads = 7	
-if (args.threads != 7):
+if(args.threads != 7):
 	maxThreads = args.threads
 
+if(not args.keywords):
+	searchKeywords = " Lyrics Official"
+else:
+	searchKeywords = ""
+	for word in args.keywords:
+		searchKeywords += word + " "
 
+#EXIT ON INVALID URL
+#this also prevents some security concerns by ensuring only compatible websites are parsed
+if (not args.url[0].startswith(allowedUrls)):
+	print("Invalid URL! Go to open.spotify.com")
+	sys.exit()
 
 #SCRAPE SPOTIFY TRACK NAMES AND ARTISTS
 try:
@@ -43,8 +65,8 @@ try:
 	request = urllib.request.urlopen(args.url[0])
 	html = request.read().decode('unicode_escape')
 	#write the html to a file for debug and analyzing purposes
-	#file = open("playlist.html","w")
-	#file.write(html)
+	with open("playlist.html","w", encoding="utf-8") as file:
+		file.write(html)
 
 
 	#find the playlist title
@@ -98,6 +120,22 @@ try:
 			title = title.replace(""""is_playable":true,"name":\"""","")
 			title = title.replace("""","preview_url":""","")
 			playlistTracks.append(title)
+	if("artist" in args.url[0]):
+		for match in re.findall(r"""external_ids[\s,\S]*?","popularity""", html):
+			#GET THE SONG TITLE
+			#there are three possibilities for what can uniquely come before the song title
+			title1 = re.findall("""is_playable":true,"name":"[\s,\S]*?","popularity""",match)
+			title2 = re.findall("""is_playable":false,"name":"[\s,\S]*?","popularity""",match)
+			title3 = re.findall(""""\},"name":"[\s,\S]*?","popularity""",match)
+
+			#remove the regex search strings to both sides of the string
+			title = (title1+title2+title3)[0][:-13]
+			title = title.replace("""is_playable":true,"name":\"""","")
+			title = title.replace("""is_playable":false,"name":\"""","")
+			title = title.replace(""""},"name":\"""","")
+			playlistTracks.append(title)
+			playlistArtists.append(playlistTitle)
+
 
 	#output the info that was found to the console
 	print()
@@ -131,7 +169,7 @@ def download(index=0):
 	#prepare and format the command used to download the song for subprocess.run()
 	cmd = command + " --output /" + foldername + "/" + filename + ".%(ext)s"
 	arguments = cmd.split()
-	arguments.append("""ytsearch:"""+playlistTracks[index] + " " + playlistArtists[index] + searchKeywords)
+	arguments.append("""ytsearch:"""+playlistTracks[index] + " " + playlistArtists[index] + " " +  searchKeywords)
 
 	try:
 		#then, run the command (stout=null so that concurrent threads dont spam the console with feedback)
@@ -142,12 +180,16 @@ def download(index=0):
 
 
 def convert():
-	#CONVERT M4A TO MP3 (if flag is set)
+	#CONVERT M4A TO MP3 OR WAV (if flag is set)
+	extension = ".mp3"
+	if (args.wav):
+		extension = ".wav"
+
 	for file in os.listdir("./"+foldername+"/"):
 		if(file.endswith(".m4a")):
 			try:
-				subprocess.run(["ffmpeg","-y","-i","./"+foldername+"/"+file,"./"+foldername+"/"+file[:-4]+".mp3"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-				if(os.path.exists("./"+foldername+"/"+file[:-4]+".mp3")):
+				subprocess.run(["ffmpeg","-n","-i","./"+foldername+"/"+file,"./"+foldername+"/"+file[:-4]+extension],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+				if(os.path.exists("./"+foldername+"/"+file[:-4]+extension)):
 					os.remove("./"+foldername+"/"+file)
 					print(file + " converted")
 			except Exception as e:
@@ -174,7 +216,7 @@ with ThreadPoolExecutor(max_workers=maxThreads) as executor:
 
 
 #if --mp3 is enabled, convert all downloaded videos using multithreading
-if(args.fast and args.mp3):
+if((args.fast and args.mp3) or (args.fast and args.wav)):
 	print()
 	print("CONVERTING ...")
 	with ThreadPoolExecutor(max_workers=maxThreads) as executor:
